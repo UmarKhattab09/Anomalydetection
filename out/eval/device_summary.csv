@@ -1,0 +1,5 @@
+device_id,median_effective_hz,n_train_sessions,n_val_sessions,n_test_sessions,threshold,mean_test_f1_lstm
+279,71.43,3,1,2,0.603015,0.4111
+281,56.44,3,1,2,0.371895,0.6984
+282,90.91,3,1,2,0.272176,0.8022
+283,52.63,3,1,2,0.463128,0.4817

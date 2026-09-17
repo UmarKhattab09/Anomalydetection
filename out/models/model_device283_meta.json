@@ -1,0 +1,39 @@
+{
+  "device_id": 283,
+  "channels": [
+    "accel_x",
+    "accel_y",
+    "accel_z",
+    "gyro_x",
+    "gyro_y",
+    "gyro_z",
+    "mag_x",
+    "mag_y",
+    "mag_z",
+    "yaw",
+    "pitch",
+    "roll"
+  ],
+  "window_size": 77,
+  "window_step": 15,
+  "threshold": 0.4631282389163971,
+  "threshold_percentile": 95,
+  "val_error_mean": 0.16309942305088043,
+  "val_error_std": 0.1073002889752388,
+  "best_val_loss": 0.15317429788410664,
+  "n_train_windows": 291,
+  "n_val_windows": 97,
+  "train_sessions": [
+    "398",
+    "400",
+    "404"
+  ],
+  "val_sessions": [
+    "402"
+  ],
+  "test_sessions": [
+    "405",
+    "403"
+  ],
+  "normalizer_path": "./out/models\\normalizer_device283.json"
+}

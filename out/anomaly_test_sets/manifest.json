@@ -1,0 +1,129 @@
+[
+  {
+    "device_id": 279,
+    "session_id": "398",
+    "csv": "./out/anomaly_test_sets\\device279_session398_anomalies.csv",
+    "labels": "./out/anomaly_test_sets\\device279_session398_labels.json",
+    "n_samples": 2881,
+    "types_injected": [
+      "overshoot",
+      "undershoot",
+      "stall",
+      "jitter",
+      "drift",
+      "early_stop",
+      "axis_decouple"
+    ]
+  },
+  {
+    "device_id": 279,
+    "session_id": "405",
+    "csv": "./out/anomaly_test_sets\\device279_session405_anomalies.csv",
+    "labels": "./out/anomaly_test_sets\\device279_session405_labels.json",
+    "n_samples": 3381,
+    "types_injected": [
+      "overshoot",
+      "undershoot",
+      "stall",
+      "jitter",
+      "drift",
+      "early_stop",
+      "axis_decouple"
+    ]
+  },
+  {
+    "device_id": 281,
+    "session_id": "404",
+    "csv": "./out/anomaly_test_sets\\device281_session404_anomalies.csv",
+    "labels": "./out/anomaly_test_sets\\device281_session404_labels.json",
+    "n_samples": 1520,
+    "types_injected": [
+      "overshoot",
+      "undershoot",
+      "stall",
+      "jitter",
+      "drift",
+      "early_stop",
+      "axis_decouple"
+    ]
+  },
+  {
+    "device_id": 281,
+    "session_id": "403",
+    "csv": "./out/anomaly_test_sets\\device281_session403_anomalies.csv",
+    "labels": "./out/anomaly_test_sets\\device281_session403_labels.json",
+    "n_samples": 1525,
+    "types_injected": [
+      "overshoot",
+      "undershoot",
+      "stall",
+      "jitter",
+      "drift",
+      "early_stop",
+      "axis_decouple"
+    ]
+  },
+  {
+    "device_id": 282,
+    "session_id": "402",
+    "csv": "./out/anomaly_test_sets\\device282_session402_anomalies.csv",
+    "labels": "./out/anomaly_test_sets\\device282_session402_labels.json",
+    "n_samples": 1539,
+    "types_injected": [
+      "overshoot",
+      "undershoot",
+      "stall",
+      "jitter",
+      "drift",
+      "early_stop",
+      "axis_decouple"
+    ]
+  },
+  {
+    "device_id": 282,
+    "session_id": "405",
+    "csv": "./out/anomaly_test_sets\\device282_session405_anomalies.csv",
+    "labels": "./out/anomaly_test_sets\\device282_session405_labels.json",
+    "n_samples": 1567,
+    "types_injected": [
+      "overshoot",
+      "undershoot",
+      "stall",
+      "jitter",
+      "drift",
+      "early_stop"
+    ]
+  },
+  {
+    "device_id": 283,
+    "session_id": "405",
+    "csv": "./out/anomaly_test_sets\\device283_session405_anomalies.csv",
+    "labels": "./out/anomaly_test_sets\\device283_session405_labels.json",
+    "n_samples": 1528,
+    "types_injected": [
+      "overshoot",
+      "undershoot",
+      "stall",
+      "jitter",
+      "drift",
+      "early_stop",
+      "axis_decouple"
+    ]
+  },
+  {
+    "device_id": 283,
+    "session_id": "403",
+    "csv": "./out/anomaly_test_sets\\device283_session403_anomalies.csv",
+    "labels": "./out/anomaly_test_sets\\device283_session403_labels.json",
+    "n_samples": 1527,
+    "types_injected": [
+      "overshoot",
+      "undershoot",
+      "stall",
+      "jitter",
+      "drift",
+      "early_stop",
+      "axis_decouple"
+    ]
+  }
+]

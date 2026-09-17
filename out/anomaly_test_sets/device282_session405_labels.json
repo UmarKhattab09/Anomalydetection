@@ -1,0 +1,32 @@
+[
+  {
+    "type": "overshoot",
+    "start_idx": 122,
+    "end_idx": 251
+  },
+  {
+    "type": "undershoot",
+    "start_idx": 382,
+    "end_idx": 500
+  },
+  {
+    "type": "stall",
+    "start_idx": 627,
+    "end_idx": 793
+  },
+  {
+    "type": "jitter",
+    "start_idx": 968,
+    "end_idx": 1063
+  },
+  {
+    "type": "drift",
+    "start_idx": 1123,
+    "end_idx": 1210
+  },
+  {
+    "type": "early_stop",
+    "start_idx": 1275,
+    "end_idx": 1434
+  }
+]
