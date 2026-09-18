@@ -67,7 +67,7 @@ EXCLUDED_DEVICES_DEFAULT: set[int] = {280}
 # so splitting by window would let near-duplicate windows appear in both train and
 # test and silently inflate every metric.
 N_TEST_SESSIONS_PER_DEVICE: int = 2
-N_VAL_SESSIONS_PER_DEVICE: int = 1
+N_VAL_SESSIONS_PER_DEVICE: int = 2
 
 # Sliding window config for the autoencoder and rule baselines.
 # ~77 samples / 15 step @ 100Hz ≈ 0.77s window / 0.15s stride — matches the prior

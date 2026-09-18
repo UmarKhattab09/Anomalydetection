@@ -268,6 +268,12 @@ def plot_combined_after(merged_pairs: dict[str, pd.DataFrame], session_id: str, 
 # Main pipeline
 # --------------------------------------------------------------------------
 
+_TRIMMED_IMU_COLS: list[str] = [
+    "accel_x", "accel_y", "accel_z", "gyro_x", "gyro_y", "gyro_z",
+    "mag_x", "mag_y", "mag_z", "yaw", "pitch", "roll",
+]
+
+
 def process_session(robot_csv: str, imu_csv: str, session_id: str, output_dir: str) -> pd.DataFrame:
     os.makedirs(output_dir, exist_ok=True)
 
@@ -276,6 +282,7 @@ def process_session(robot_csv: str, imu_csv: str, session_id: str, output_dir: s
 
     imu_devices: dict[int, pd.DataFrame] = {}
     merged_pairs: dict[str, pd.DataFrame] = {}
+    imu_trimmed_by_device: dict[int, pd.DataFrame] = {}
     summary_rows = []
 
     for pair in JOINT_DEVICE_MAP:
@@ -300,6 +307,8 @@ def process_session(robot_csv: str, imu_csv: str, session_id: str, output_dir: s
             imu_df.iloc[imu_start_idx:imu_end_idx + 1].reset_index(drop=True)
             if imu_start_idx is not None else imu_df.iloc[0:0]
         )
+
+        imu_trimmed_by_device.setdefault(device_id, imu_trimmed)  # joint_2/3 share a device; keep the first window
 
         clock_start, clock_end = clock_overlap(robot_raw, imu_df)
 
@@ -351,6 +360,33 @@ def process_session(robot_csv: str, imu_csv: str, session_id: str, output_dir: s
     summary_csv = os.path.join(output_dir, f"summary_session{session_id}.csv")
     summary_df.to_csv(summary_csv, index=False)
     print(f"\nSaved summary to {summary_csv}")
+
+    # CSVs of the movement itself, trimmed to the active window (movement start -> end).
+    #  trimmed_session<id>.csv      data behind the "after" plot: robot joints + IMU readings
+    #                               matched at the robot's sample rate, one block per joint/device pair
+    #  trimmed_imu_session<id>.csv  the same trimmed IMU windows at the IMU's native sample rate
+    #                               (this is the signal the autoencoders see)
+    device_by_joint = {pair["joint"]: pair["device_id"] for pair in JOINT_DEVICE_MAP}
+    imu_cols = [c for c in _TRIMMED_IMU_COLS]
+    robot_cols = [f"joint_{i}" for i in range(1, 7)]
+
+    blocks = []
+    for joint_col, merged in merged_pairs.items():
+        block = merged[["recorded_at_dt"] + [c for c in robot_cols if c in merged.columns]
+                       + [c for c in imu_cols if c in merged.columns]].copy()
+        block.insert(0, "device_id", device_by_joint[joint_col])
+        block.insert(0, "joint", joint_col)
+        blocks.append(block)
+    trimmed_csv = os.path.join(output_dir, f"trimmed_session{session_id}.csv")
+    pd.concat(blocks, ignore_index=True).to_csv(trimmed_csv, index=False)
+
+    imu_blocks = []
+    for device_id, imu_trim in imu_trimmed_by_device.items():
+        imu_blocks.append(imu_trim[["device_id", "recorded_at_dt"] + [c for c in imu_cols if c in imu_trim.columns]])
+    trimmed_imu_csv = os.path.join(output_dir, f"trimmed_imu_session{session_id}.csv")
+    pd.concat(imu_blocks, ignore_index=True).to_csv(trimmed_imu_csv, index=False)
+    print(f"Saved trimmed IMU data to {trimmed_imu_csv}")
+    print(f"Saved trimmed movement data to {trimmed_csv}")
     print(f"Saved plots to {before_path} and {after_path}")
 
     return summary_df

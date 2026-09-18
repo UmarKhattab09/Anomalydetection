@@ -1,7 +1,7 @@
 """
-IMU Anomaly Detection — Evaluation (LSTM autoencoder vs. rule-based baselines)
-================================================================================
-Scores both the trained per-device LSTM autoencoders and the rule-based
+IMU Anomaly Detection — Evaluation (autoencoders vs. rule-based baselines)
+==========================================================================
+Scores the trained per-device autoencoders (dense_ae, lstm_ae, rnn_ae) and the rule-based
 baselines (rule_baselines.py) against the SAME held-out, anomaly-injected test
 sessions (generate_anomalies.py output), using the injected ground-truth
 intervals to compute precision/recall/F1 PER ANOMALY TYPE — not one aggregate
@@ -9,15 +9,15 @@ normal-vs-anomaly number.
 
 Usage
 -----
-  python train_imu_autoencoder.py --output_dir ./out/models      # 1. train
+  python train_imu_autoencoder.py                                # 1. train -> models/trained/<model>/
   python generate_anomalies.py --output_dir ./out/anomaly_test_sets  # 2. inject
-  python evaluate.py --model_dir ./out/models --anomaly_dir ./out/anomaly_test_sets --output_dir ./out/eval
+  python evaluate.py --model_dir ./models/trained --anomaly_dir ./out/anomaly_test_sets --output_dir ./out/eval
 
 Outputs (in --output_dir)
 --------------------------
-  device_summary.csv       per-device: sample rate, session counts, threshold, aggregate test F1
-  comparison_table.csv     per anomaly type: LSTM P/R/F1 vs. its rule-based baseline P/R/F1
-  overlay_<type>.png       one example per anomaly type: LSTM error + baseline signal +
+  device_summary.csv       per model and device: sample rate, session counts, threshold, aggregate test F1
+  comparison_table.csv     per anomaly type: each model's P/R/F1 vs. its rule-based baseline P/R/F1
+  overlay_<type>.png       one example per anomaly type: every model's error + baseline signal +
                             robot-joint ground truth, with the true injected interval shaded
 """
 
@@ -33,7 +33,7 @@ import pandas as pd
 import torch
 
 from generate_anomalies import ANOMALY_TYPES, _reference_channel
-from models.autoencoder import load_model_for_device
+from models.autoencoder import MODEL_CLASSES, load_model_for_device
 from pipeline_common import (
     EXCLUDED_DEVICES_DEFAULT,
     ZScoreNormalizer,
@@ -50,6 +50,7 @@ from rule_baselines import (
     jitter_variance_flags,
     rolling_xcorr_flags,
 )
+from scoring import two_sided_bounds, two_sided_flags, val_reference_errors
 
 OVERLAP_THRESHOLD = 0.5  # fraction of a window that must fall inside a true interval to count as that type
 
@@ -100,27 +101,42 @@ def precision_recall_f1(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, 
 # Per-session scoring
 # --------------------------------------------------------------------------
 
-def score_session(csv_path: str, labels_path: str, model, meta: dict, normalizer: ZScoreNormalizer,
+def score_session(csv_path: str, labels_path: str, models: dict[str, tuple], normalizer: ZScoreNormalizer,
                    reference_window: np.ndarray, reference_pool: np.ndarray, torch_device: torch.device,
-                   cusum_h: float | None = None) -> dict:
+                   cusum_h: float | None = None, ref_errors: dict[str, np.ndarray] | None = None,
+                   score_mode: str = "two_sided") -> dict:
+    """models: {model_name: (model, meta)} for one device. Channels/window/normalizer are
+    identical across a device's models (same split, same train sessions), so the first
+    model's meta drives windowing; each model keeps its own thresholds.
+    score_mode "two_sided" flags errors outside the central 95% of clean val error (ref_errors,
+    per model); "one_sided" flags errors above the 95th-percentile threshold. See scoring.py."""
     df = pd.read_csv(csv_path)
     df["recorded_at_dt"] = pd.to_datetime(df["recorded_at_dt"])  # CSV round-trip loses the dtype
     with open(labels_path) as f:
         labels = json.load(f)
 
+    meta = next(iter(models.values()))[1]
     channels = meta["channels"]
     window_size = meta["window_size"]
     window_step = meta["window_step"]
-    threshold = meta["threshold"]
 
     arr_norm = normalizer.transform(df[channels].values.astype(np.float64))
     windows, starts = make_windows(arr_norm, window_size, window_step)
     if len(windows) == 0:
         return {"error": "no windows"}
 
+    model_scores = {}
+    window_tensor = torch.tensor(windows, dtype=torch.float32).to(torch_device)
     with torch.no_grad():
-        lstm_errors = model.reconstruction_error(torch.tensor(windows, dtype=torch.float32).to(torch_device)).cpu().numpy()
-    lstm_flags = lstm_errors > threshold
+        for name, (model, m_meta) in models.items():
+            errors = model.reconstruction_error(window_tensor).cpu().numpy()
+            if score_mode == "two_sided":
+                lo, hi = two_sided_bounds(ref_errors[name])
+                model_scores[name] = {"errors": errors, "flags": two_sided_flags(errors, (lo, hi)),
+                                      "threshold": hi, "lower": lo}
+            else:
+                model_scores[name] = {"errors": errors, "flags": errors > m_meta["threshold"],
+                                      "threshold": m_meta["threshold"], "lower": None}
 
     primary_col = _reference_channel(channels)
     primary_idx = channels.index(primary_col)
@@ -145,7 +161,7 @@ def score_session(csv_path: str, labels_path: str, model, meta: dict, normalizer
 
     return {
         "df": df, "labels": labels, "starts": starts, "window_size": window_size,
-        "lstm_errors": lstm_errors, "lstm_flags": lstm_flags, "threshold": threshold,
+        "model_scores": model_scores,
         "drift_flags": drift_flags, "cusum_signal": cusum_signal,
         "jitter_flags": jitter_flags, "jitter_signal": jitter_signal,
         "dtw_flags": dtw_flags, "dtw_signal": dtw_signal,
@@ -180,9 +196,16 @@ BASELINE_NAME = {
 # Main evaluation
 # --------------------------------------------------------------------------
 
-def evaluate(model_dir: str, anomaly_dir: str, output_dir: str, excluded_devices: set[int] | None = None) -> None:
+def evaluate(model_dir: str, anomaly_dir: str, output_dir: str, excluded_devices: set[int] | None = None,
+             model_names: list[str] | None = None, score_mode: str = "two_sided") -> None:
     os.makedirs(output_dir, exist_ok=True)
     torch_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if model_names is None:
+        model_names = [n for n in sorted(MODEL_CLASSES) if os.path.isdir(os.path.join(model_dir, n))]
+    if not model_names:
+        raise SystemExit(f"No trained models found under {model_dir} (expected subfolders {sorted(MODEL_CLASSES)})")
+    print(f"Evaluating models: {model_names}")
 
     with open(os.path.join(anomaly_dir, "manifest.json")) as f:
         manifest = json.load(f)
@@ -191,22 +214,29 @@ def evaluate(model_dir: str, anomaly_dir: str, output_dir: str, excluded_devices
     for entry in manifest:
         by_device.setdefault(entry["device_id"], []).append(entry)
 
-    # Per-type accumulators: {type: {"lstm": (y_true[], y_pred[]), "baseline": (...)}}
-    per_type_true_pred_lstm: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {t: [] for t in ANOMALY_TYPES}
-    per_type_true_pred_baseline: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {t: [] for t in ANOMALY_TYPES}
+    # Per-type accumulators: per model, and once for the (model-independent) baselines
+    per_type_model: dict[str, dict[str, list[tuple[np.ndarray, np.ndarray]]]] = {
+        n: {t: [] for t in ANOMALY_TYPES} for n in model_names}
+    per_type_baseline: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {t: [] for t in ANOMALY_TYPES}
 
     device_summary_rows = []
     example_for_type: dict[str, dict] = {}
+    model_f1s: dict[tuple[str, int], list[float]] = {}
 
     device_sessions = load_all_device_sessions(excluded_devices=excluded_devices)
     splits = session_level_split(device_sessions)
 
     for device_id, entries in by_device.items():
-        loaded = load_model_for_device(device_id, model_dir, torch_device)
-        if loaded is None:
-            print(f"  [skip] device {device_id}: no trained model found in {model_dir}")
+        models: dict[str, tuple] = {}
+        for name in model_names:
+            loaded = load_model_for_device(device_id, os.path.join(model_dir, name), torch_device)
+            if loaded is None:
+                print(f"  [skip] device {device_id}: no trained {name} found in {model_dir}")
+                continue
+            models[name] = loaded
+        if not models:
             continue
-        model, meta = loaded
+        meta = next(iter(models.values()))[1]
         normalizer = ZScoreNormalizer.load(meta["normalizer_path"])
 
         # Build the DTW reference + calibration pool from this device's TRAIN windows.
@@ -219,18 +249,20 @@ def evaluate(model_dir: str, anomaly_dir: str, output_dir: str, excluded_devices
                 train_windows_list.append(w)
         train_windows = np.concatenate(train_windows_list, axis=0) if train_windows_list else np.empty((0, meta["window_size"], len(meta["channels"])))
         reference_window = build_reference_window(train_windows) if len(train_windows) else None
+        ref_errors = {name: val_reference_errors(m, normalizer, splits[device_id].val, meta["channels"],
+                                                 meta["window_size"], meta["window_step"])
+                      for name, (m, _) in models.items()}
 
         primary_col = _reference_channel(meta["channels"])
         train_primary_series = np.concatenate([s.df[primary_col].values.astype(np.float64) for s in train_sessions]) if train_sessions else np.array([])
         cusum_h = calibrate_cusum_h(train_primary_series) if len(train_primary_series) else None
 
-        device_type_f1s = []
-
         for entry in entries:
             if reference_window is None:
                 continue
-            result = score_session(entry["csv"], entry["labels"], model, meta, normalizer,
-                                    reference_window, train_windows, torch_device, cusum_h=cusum_h)
+            result = score_session(entry["csv"], entry["labels"], models, normalizer,
+                                    reference_window, train_windows, torch_device, cusum_h=cusum_h,
+                                    ref_errors=ref_errors, score_mode=score_mode)
             if "error" in result:
                 continue
 
@@ -242,19 +274,17 @@ def evaluate(model_dir: str, anomaly_dir: str, output_dir: str, excluded_devices
                 if true_mask.sum() == 0:
                     continue
                 eval_mask = true_mask | normal_mask  # restrict to this type vs. normal (per-type binary task)
-
                 y_true = true_mask[eval_mask]
-                y_pred_lstm = result["lstm_flags"][eval_mask]
-                per_type_true_pred_lstm[atype].append((y_true, y_pred_lstm))
 
-                baseline_key = BASELINE_FOR_TYPE[atype]
-                baseline_flags = result.get(baseline_key)
+                for name, score in result["model_scores"].items():
+                    y_pred = score["flags"][eval_mask]
+                    per_type_model[name][atype].append((y_true, y_pred))
+                    _, _, f1 = precision_recall_f1(y_true, y_pred)
+                    model_f1s.setdefault((name, device_id), []).append(f1)
+
+                baseline_flags = result.get(BASELINE_FOR_TYPE[atype])
                 if baseline_flags is not None:
-                    y_pred_baseline = baseline_flags[eval_mask]
-                    per_type_true_pred_baseline[atype].append((y_true, y_pred_baseline))
-
-                _, _, f1 = precision_recall_f1(y_true, y_pred_lstm)
-                device_type_f1s.append(f1)
+                    per_type_baseline[atype].append((y_true, baseline_flags[eval_mask]))
 
                 if atype not in example_for_type:
                     robot_df = next((s.robot_df for s in device_sessions.get(device_id, [])
@@ -269,54 +299,57 @@ def evaluate(model_dir: str, anomaly_dir: str, output_dir: str, excluded_devices
             "session_id": s.session_id, "effective_hz": s.sample_rate.effective_hz,
         } for s in device_sessions.get(device_id, [])])
 
-        device_summary_rows.append({
-            "device_id": device_id,
-            "median_effective_hz": round(rate_df["effective_hz"].median(), 2) if len(rate_df) else None,
-            "n_train_sessions": len(splits[device_id].train),
-            "n_val_sessions": len(splits[device_id].val),
-            "n_test_sessions": len(splits[device_id].test),
-            "threshold": round(meta["threshold"], 6),
-            "mean_test_f1_lstm": round(float(np.mean(device_type_f1s)), 4) if device_type_f1s else None,
-        })
+        for name, (_, m_meta) in models.items():
+            f1s = model_f1s.get((name, device_id), [])
+            lo_hi = two_sided_bounds(ref_errors[name])
+            device_summary_rows.append({
+                "model": name,
+                "device_id": device_id,
+                "median_effective_hz": round(rate_df["effective_hz"].median(), 2) if len(rate_df) else None,
+                "n_train_sessions": len(splits[device_id].train),
+                "n_val_sessions": len(splits[device_id].val),
+                "n_test_sessions": len(splits[device_id].test),
+                "score_mode": score_mode,
+                "threshold_upper": round(lo_hi[1] if score_mode == "two_sided" else m_meta["threshold"], 6),
+                "threshold_lower": round(lo_hi[0], 6) if score_mode == "two_sided" else None,
+                "mean_test_f1": round(float(np.mean(f1s)), 4) if f1s else None,
+            })
 
-    # ── Comparison table: per anomaly type, LSTM vs. its baseline ──
+    # ── Comparison table: per anomaly type, every model vs. its rule-based baseline ──
     comparison_rows = []
     for atype in ANOMALY_TYPES:
-        lstm_pairs = per_type_true_pred_lstm[atype]
-        baseline_pairs = per_type_true_pred_baseline[atype]
+        row = {"anomaly_type": atype}
+        n_eval = 0
+        for name in model_names:
+            pairs = per_type_model[name][atype]
+            if pairs:
+                y_true = np.concatenate([p[0] for p in pairs])
+                y_pred = np.concatenate([p[1] for p in pairs])
+                mp, mr, mf = precision_recall_f1(y_true, y_pred)
+                n_eval = len(y_true)
+            else:
+                mp = mr = mf = None
+            row[f"{name}_precision"], row[f"{name}_recall"], row[f"{name}_f1"] = mp, mr, mf
+        row["n_eval_windows"] = n_eval
 
-        if lstm_pairs:
-            y_true = np.concatenate([p[0] for p in lstm_pairs])
-            y_pred = np.concatenate([p[1] for p in lstm_pairs])
-            lp, lr, lf = precision_recall_f1(y_true, y_pred)
-            n_eval = len(y_true)
-        else:
-            lp = lr = lf = None
-            n_eval = 0
-
+        baseline_pairs = per_type_baseline[atype]
+        row["baseline"] = BASELINE_NAME[BASELINE_FOR_TYPE[atype]]
         if baseline_pairs:
             y_true_b = np.concatenate([p[0] for p in baseline_pairs])
             y_pred_b = np.concatenate([p[1] for p in baseline_pairs])
-            bp, br, bf = precision_recall_f1(y_true_b, y_pred_b)
-            baseline_name = BASELINE_NAME[BASELINE_FOR_TYPE[atype]]
+            row["baseline_precision"], row["baseline_recall"], row["baseline_f1"] = precision_recall_f1(y_true_b, y_pred_b)
         else:
-            bp = br = bf = None
-            baseline_name = BASELINE_NAME[BASELINE_FOR_TYPE[atype]]
-
-        comparison_rows.append({
-            "anomaly_type": atype, "n_eval_windows": n_eval,
-            "lstm_precision": lp, "lstm_recall": lr, "lstm_f1": lf,
-            "baseline": baseline_name,
-            "baseline_precision": bp, "baseline_recall": br, "baseline_f1": bf,
-        })
+            row["baseline_precision"] = row["baseline_recall"] = row["baseline_f1"] = None
+        comparison_rows.append(row)
 
     comparison_df = pd.DataFrame(comparison_rows)
     summary_df = pd.DataFrame(device_summary_rows)
 
     print(f"\n{'=' * 70}\n Per-device summary\n{'=' * 70}")
     print(summary_df.to_string(index=False))
-    print(f"\n{'=' * 70}\n LSTM vs. rule-based baseline, per anomaly type\n{'=' * 70}")
-    print(comparison_df.to_string(index=False))
+    f1_cols = ["anomaly_type", "n_eval_windows"] + [f"{n}_f1" for n in model_names] + ["baseline", "baseline_f1"]
+    print(f"\n{'=' * 70}\n F1 per anomaly type: models vs. rule-based baseline\n{'=' * 70}")
+    print(comparison_df[f1_cols].to_string(index=False))
 
     summary_path = os.path.join(output_dir, "device_summary.csv")
     comparison_path = os.path.join(output_dir, "comparison_table.csv")
@@ -324,7 +357,7 @@ def evaluate(model_dir: str, anomaly_dir: str, output_dir: str, excluded_devices
     comparison_df.to_csv(comparison_path, index=False)
     print(f"\nSaved: {summary_path}\nSaved: {comparison_path}")
 
-    # ── Overlay plots — one example per anomaly type ──
+    # ── Overlay plots — one example per anomaly type, all models on the error panel ──
     for atype, ex in example_for_type.items():
         plot_overlay(atype, ex, output_dir)
 
@@ -362,10 +395,16 @@ def plot_overlay(atype: str, example: dict, output_dir: str) -> None:
     for ax in axes:
         ax.axvspan(ts_start, ts_end, color="red", alpha=0.15, label="true injected interval")
 
-    axes[0].plot(window_ts, result["lstm_errors"], color="tab:blue", label="LSTM reconstruction error")
-    axes[0].axhline(result["threshold"], color="tab:blue", linestyle="--", alpha=0.6, label="LSTM threshold")
-    axes[0].set_ylabel("Recon. error (MSE)")
-    axes[0].legend(loc="upper right")
+    # Models have different error scales, so plot error / threshold: 1.0 is each model's own cutoff.
+    for name, score in result["model_scores"].items():
+        axes[0].plot(window_ts, score["errors"] / score["threshold"], label=f"{name} error / threshold")
+    axes[0].axhline(1.0, color="black", linestyle="--", alpha=0.6, label="upper threshold")
+    first = next(iter(result["model_scores"].values()))
+    if first.get("lower") is not None:
+        axes[0].axhline(first["lower"] / first["threshold"], color="dimgray", linestyle=":", alpha=0.8,
+                        label=f"lower threshold ({next(iter(result['model_scores']))})")
+    axes[0].set_ylabel("Recon. error / threshold")
+    axes[0].legend(loc="upper right", fontsize=8)
 
     axes[1].plot(baseline_ts, baseline_signal, color="tab:orange", label=f"{baseline_name} signal")
     axes[1].set_ylabel(baseline_name)
@@ -389,15 +428,20 @@ def plot_overlay(atype: str, example: dict, output_dir: str) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate LSTM autoencoder vs. rule-based baselines")
-    parser.add_argument("--model_dir", default="./out/models")
+    parser = argparse.ArgumentParser(description="Evaluate autoencoders (dense_ae, lstm_ae, rnn_ae) vs. rule-based baselines")
+    parser.add_argument("--model_dir", default="./models/trained", help="Folder holding one subfolder per trained model")
+    parser.add_argument("--models", nargs="+", choices=sorted(MODEL_CLASSES), default=None,
+                        help="Which models to evaluate (default: every model with a trained subfolder)")
     parser.add_argument("--anomaly_dir", default="./out/anomaly_test_sets")
     parser.add_argument("--output_dir", default="./out/eval")
     parser.add_argument("--include_devices", type=int, nargs="+", default=None)
+    parser.add_argument("--score_mode", choices=["two_sided", "one_sided"], default="two_sided",
+                        help="How model flags are decided (see scoring.py); baselines are unaffected")
     args = parser.parse_args()
 
     excluded = EXCLUDED_DEVICES_DEFAULT.copy()
     if args.include_devices:
         excluded -= set(args.include_devices)
 
-    evaluate(args.model_dir, args.anomaly_dir, args.output_dir, excluded_devices=excluded)
+    evaluate(args.model_dir, args.anomaly_dir, args.output_dir, excluded_devices=excluded, model_names=args.models,
+             score_mode=args.score_mode)

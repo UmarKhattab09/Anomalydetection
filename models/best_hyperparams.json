@@ -1,0 +1,63 @@
+{
+  "dense_ae": {
+    "epochs": 100,
+    "patience": 15,
+    "batch_size": 16,
+    "lr": 0.0003202481427946392,
+    "weight_decay": 0.0001437670357890005,
+    "noise_std": 0.2,
+    "train_step": 5,
+    "arch": {
+      "hidden": 64,
+      "latent": 32,
+      "dropout": 0.0
+    },
+    "_selected_from": {
+      "trial": 23,
+      "val_auroc_mean": 0.9298549088366579,
+      "default_val_auroc_mean": 0.917923055508614
+    }
+  },
+  "lstm_ae": {
+    "epochs": 100,
+    "patience": 15,
+    "batch_size": 16,
+    "lr": 0.0023186733764684543,
+    "weight_decay": 4.760014604973908e-06,
+    "noise_std": 0.05,
+    "train_step": 5,
+    "arch": {
+      "enc_hidden1": 64,
+      "enc_hidden2": 8,
+      "dec_hidden1": 8,
+      "dec_hidden2": 64,
+      "dropout": 0.0
+    },
+    "_selected_from": {
+      "trial": 26,
+      "val_auroc_mean": 0.9167915938173588,
+      "default_val_auroc_mean": 0.9001344635485533
+    }
+  },
+  "rnn_ae": {
+    "epochs": 100,
+    "patience": 15,
+    "batch_size": 16,
+    "lr": 0.0013964026370516206,
+    "weight_decay": 0.0007503102775379127,
+    "noise_std": 0.3,
+    "train_step": 10,
+    "arch": {
+      "enc_hidden1": 96,
+      "enc_hidden2": 16,
+      "dec_hidden1": 16,
+      "dec_hidden2": 96,
+      "dropout": 0.3
+    },
+    "_selected_from": {
+      "trial": 36,
+      "val_auroc_mean": 0.9128434540100878,
+      "default_val_auroc_mean": 0.8966546285274282
+    }
+  }
+}

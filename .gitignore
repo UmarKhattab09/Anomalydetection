@@ -14,3 +14,8 @@ out/
 
 # Nested repo with its own .git and .gitignore
 stuff/
+
+# Trained model artifacts (regenerate with train_imu_autoencoder.py)
+models/trained/
+models/trained_defaults/
+models/logs/

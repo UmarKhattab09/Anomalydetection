@@ -245,7 +245,13 @@ def inject_session_anomalies(session: DeviceSession, rng: np.random.Generator) -
 # Main generator — runs over every device's TEST sessions (per the shared split)
 # --------------------------------------------------------------------------
 
-def generate(output_dir: str, excluded_devices: set[int] | None = None, seed: int = SEED) -> dict:
+def generate(output_dir: str, excluded_devices: set[int] | None = None, seed: int = SEED,
+             split_name: str = "test") -> dict:
+    """split_name="test" is the reporting set; "val" builds a separate validation set (different
+    sessions, different seed) used ONLY for hyperparameter selection, never for reporting."""
+    if split_name not in ("test", "val"):
+        raise ValueError("split_name must be 'test' or 'val'")
+    seed = seed + (1000 if split_name == "val" else 0)
     os.makedirs(output_dir, exist_ok=True)
 
     device_sessions = load_all_device_sessions(excluded_devices=excluded_devices)
@@ -253,7 +259,7 @@ def generate(output_dir: str, excluded_devices: set[int] | None = None, seed: in
 
     manifest = []
     for device_id, split in splits.items():
-        for session in split.test:
+        for session in getattr(split, split_name):
             rng = np.random.default_rng(seed + device_id + int(session.session_id))
             labeled_df, labels = inject_session_anomalies(session, rng)
 
@@ -283,7 +289,10 @@ def generate(output_dir: str, excluded_devices: set[int] | None = None, seed: in
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Inject synthetic labeled anomalies into held-out test sessions")
-    parser.add_argument("--output_dir", default="./out/anomaly_test_sets")
+    parser.add_argument("--split", choices=["test", "val"], default="test",
+                        help="Which held-out sessions to inject into (val is for hyperparameter tuning only)")
+    parser.add_argument("--output_dir", default=None,
+                        help="Default: ./out/anomaly_test_sets (test) or ./out/anomaly_val_sets (val)")
     parser.add_argument("--include_devices", type=int, nargs="+", default=None,
                          help="Override EXCLUDED_DEVICES_DEFAULT (e.g. --include_devices 280 281 282 283) "
                               "to force-include a normally-excluded device such as 280.")
@@ -293,4 +302,5 @@ if __name__ == "__main__":
     if args.include_devices:
         excluded -= set(args.include_devices)
 
-    generate(output_dir=args.output_dir, excluded_devices=excluded)
+    out_dir = args.output_dir or ("./out/anomaly_val_sets" if args.split == "val" else "./out/anomaly_test_sets")
+    generate(output_dir=out_dir, excluded_devices=excluded, split_name=args.split)
