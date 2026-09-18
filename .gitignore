@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+venv/
+.venv/
+
+# Editor / tool state
+.claude/
+.vscode/
+
+# Generated outputs (regenerate with the scripts; see handoff.md)
+out/
+
+# Nested repo with its own .git and .gitignore
+stuff/
