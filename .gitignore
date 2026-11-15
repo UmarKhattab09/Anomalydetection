@@ -9,7 +9,7 @@ venv/
 .claude/
 .vscode/
 
-# Generated outputs (regenerate with the scripts; see handoff.md)
+# Generated outputs (regenerate with the scripts; see README.md)
 out/
 
 # Nested repo with its own .git and .gitignore
